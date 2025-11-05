@@ -1,1 +1,440 @@
-# Moviebox
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mavado VPN - Secure Connection</title>
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Load Font: Inter -->
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #0d1117; /* Dark background */
+        }
+        .vpn-card {
+            background: linear-gradient(145deg, #161b22, #0d1117);
+            box-shadow: 0 10px 30px rgba(0, 255, 255, 0.2);
+            border: 1px solid #00aaff44;
+            transition: all 0.3s ease;
+        }
+        .connect-btn {
+            background-color: #00aaff;
+            background-image: linear-gradient(45deg, #00aaff 0%, #00ffaa 100%);
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 15px rgba(0, 255, 170, 0.4);
+            font-weight: 700;
+        }
+        .connect-btn:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(0, 255, 170, 0.6);
+        }
+        .disconnect-btn {
+            background-color: #ff0077;
+            box-shadow: 0 4px 15px rgba(255, 0, 119, 0.4);
+        }
+        .status-dot {
+            width: 1rem;
+            height: 1rem;
+            border-radius: 50%;
+            display: inline-block;
+            transition: background-color 0.5s ease;
+        }
+
+        /* Particle canvas styles */
+        #particle-canvas {
+            position: fixed;
+            inset: 0; /* top:0; right:0; bottom:0; left:0 */
+            width: 100%;
+            height: 100%;
+            z-index: 0; /* behind the app */
+            pointer-events: none; /* don't block clicks */
+        }
+
+        /* ensure the app sits above particles */
+        #app { position: relative; z-index: 2; }
+
+    </style>
+</head>
+<body class="flex items-center justify-center min-h-screen p-4">
+
+    <!-- Full-screen particles canvas (will run behind the UI) -->
+    <canvas id="particle-canvas" aria-hidden="true"></canvas>
+
+    <div id="app" class="vpn-card p-8 md:p-10 rounded-xl w-full max-w-sm text-white space-y-6">
+        
+        <!-- Header & Logo -->
+        <header class="text-center mb-6">
+            <svg class="mx-auto h-12 w-12 text-teal-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+            </svg>
+            <h1 class="text-3xl font-extrabold mt-2 text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-green-300">
+                Mavado VPN
+            </h1>
+        </header>
+
+        <!-- Connection Status -->
+        <div class="flex items-center justify-between p-4 rounded-lg border border-gray-700">
+            <span class="text-lg font-semibold text-gray-300">Connection Status</span>
+            <div id="statusIndicator" class="flex items-center space-x-2">
+                <span id="statusDot" class="status-dot bg-red-600"></span>
+                <span id="statusText" class="text-red-400 font-medium">Disconnected</span>
+            </div>
+        </div>
+
+        <!-- Connection Info -->
+        <div class="space-y-4">
+            <div class="p-3 rounded-lg bg-gray-800/50">
+                <p class="text-sm text-gray-400">Your Apparent IP Address</p>
+                <p id="ipAddress" class="text-xl font-bold text-cyan-300 truncate">--.--.--.--</p>
+            </div>
+            <div class="p-3 rounded-lg bg-gray-800/50">
+                <p class="text-sm text-gray-400">Server Location</p>
+                <p id="location" class="text-xl font-bold text-green-300 truncate">
+                    Finding real location...
+                </p>
+            </div>
+        </div>
+
+        <!-- Control Button -->
+        <button id="vpnButton" onclick="toggleVpn()" class="connect-btn w-full py-3 rounded-xl uppercase tracking-widest text-lg disabled:opacity-50 disabled:cursor-not-allowed" aria-live="polite">
+            Connect
+        </button>
+
+        <!-- Message Box for errors/info (replacing alert()) -->
+        <div id="messageBox" class="text-center p-3 rounded-lg text-sm transition-opacity duration-300 opacity-0 hidden" role="alert"></div>
+        
+    </div>
+
+    <script type="module">
+        // Global variables provided by the environment
+        const apiKey = ""
+        const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+
+        // --- Simulated VPN State and Constants ---
+        let isConnected = false;
+        let isConnecting = false;
+        
+        // Use a persistent random ID for the simulated IP
+        const generateSimulatedIp = () => {
+             // Generates a random IP-like string, e.g., 172.21.34.112
+             return Array(4).fill(0).map(() => Math.floor(Math.random() * 255) + 1).join('.');
+        }
+        
+        const REAL_IP = generateSimulatedIp();
+        const REAL_LOCATION = 'San Francisco, USA (Local ISP)';
+
+        // Simulated VPN Locations (for variety)
+        const VPN_SERVERS = [
+            { location: 'Tokyo, Japan', ip: generateSimulatedIp() },
+            { location: 'Frankfurt, Germany', ip: generateSimulatedIp() },
+            { location: 'Sydney, Australia', ip: generateSimulatedIp() }
+        ];
+
+        let currentVpnServer = VPN_SERVERS[0]; // Default server
+
+        // --- DOM Elements ---
+        const statusDot = document.getElementById('statusDot');
+        const statusText = document.getElementById('statusText');
+        const ipAddressEl = document.getElementById('ipAddress');
+        const locationEl = document.getElementById('location');
+        const vpnButton = document.getElementById('vpnButton');
+        const messageBox = document.getElementById('messageBox');
+
+        // --- Utility Functions ---
+
+        // Custom message box utility (replaces alert())
+        function showMessage(text, type = 'info') {
+            let bgColor = 'bg-blue-900/80 text-blue-300';
+            if (type === 'error') bgColor = 'bg-red-900/80 text-red-300';
+            if (type === 'success') bgColor = 'bg-green-900/80 text-green-300';
+            
+            messageBox.className = `text-center p-3 rounded-lg text-sm transition-opacity duration-300 ${bgColor}`;
+            messageBox.textContent = text;
+            messageBox.classList.remove('hidden', 'opacity-0');
+            messageBox.classList.add('opacity-100');
+
+            setTimeout(() => {
+                messageBox.classList.remove('opacity-100');
+                messageBox.classList.add('opacity-0');
+                setTimeout(() => messageBox.classList.add('hidden'), 300);
+            }, 5000);
+        }
+
+        // Simulates the API call to get a real-world response (used for latency)
+        async function checkNetworkStatus() {
+            const systemPrompt = "You are a network analysis tool. Respond only with the current date, time, and a brief status check (e.g., 'Network check complete.'). Do not discuss VPNs or IP addresses.";
+            const userQuery = "Perform a quick status check and report your findings.";
+
+            const payload = {
+                contents: [{ parts: [{ text: userQuery }] }],
+                tools: [{ "google_search": {} }],
+                systemInstruction: { parts: [{ text: systemPrompt }] },
+            };
+
+            // Using exponential backoff for the fetch request
+            const MAX_RETRIES = 5;
+            for (let i = 0; i < MAX_RETRIES; i++) {
+                try {
+                    const response = await fetch(apiUrl, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+
+                    if (!response.ok) {
+                        if (response.status === 429 && i < MAX_RETRIES - 1) {
+                            // Too many requests, retry after delay
+                            const delay = Math.pow(2, i) * 1000 + Math.random() * 1000;
+                            await new Promise(resolve => setTimeout(resolve, delay));
+                            continue;
+                        }
+                        throw new Error(`API request failed with status: ${response.status}`);
+                    }
+
+                    const result = await response.json();
+                    const text = result.candidates?.[0]?.content?.parts?.[0]?.text || "Response error.";
+                    // Successfully fetched or simulated network latency
+                    return { success: true, text: text };
+
+                } catch (error) {
+                    console.error("Fetch attempt failed:", error);
+                    if (i === MAX_RETRIES - 1) {
+                        return { success: false, error: "Network check failed after multiple retries." };
+                    }
+                    const delay = Math.pow(2, i) * 1000 + Math.random() * 1000;
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                }
+            }
+        }
+
+        // --- Core VPN Logic ---
+
+        function updateUi(status, ip, location, buttonText, buttonClass, buttonDisabled = false) {
+            statusDot.className = `status-dot ${status === 'Connected' ? 'bg-green-500' : 'bg-red-600'}`;
+            statusText.textContent = status;
+            statusText.className = status === 'Connected' ? 'text-green-400 font-medium' : 'text-red-400 font-medium';
+            ipAddressEl.textContent = ip;
+            locationEl.textContent = location;
+            vpnButton.textContent = buttonText;
+            vpnButton.className = `w-full py-3 rounded-xl uppercase tracking-widest text-lg disabled:opacity-50 disabled:cursor-not-allowed ${buttonClass}`;
+            vpnButton.disabled = buttonDisabled;
+        }
+
+        async function connectVpn() {
+            if (isConnected || isConnecting) return;
+
+            // 1. Start Connection Sequence
+            isConnecting = true;
+            showMessage("Connecting to " + currentVpnServer.location + "...", 'info');
+            updateUi('Connecting...', 'Waiting...', 'Establishing secure tunnel...', 
+                     'Connecting...', 'bg-yellow-600 animate-pulse', true);
+            
+            // 2. Simulate Network Latency/Grounding Check
+            const networkResult = await checkNetworkStatus();
+
+            // 3. Complete Connection
+            if (networkResult.success) {
+                isConnected = true;
+                isConnecting = false;
+                
+                // Switch to a random VPN server location for better simulation
+                const newServerIndex = Math.floor(Math.random() * VPN_SERVERS.length);
+                currentVpnServer = VPN_SERVERS[newServerIndex];
+
+                updateUi('Connected', currentVpnServer.ip, currentVpnServer.location, 
+                         'Disconnect', 'disconnect-btn', false);
+                showMessage(`Successfully connected to Mavado VPN via ${currentVpnServer.location}!`, 'success');
+            } else {
+                // Connection failed
+                isConnecting = false;
+                updateUi('Disconnected', REAL_IP, REAL_LOCATION, 
+                         'Connect', 'connect-btn', false);
+                showMessage(`Connection Failed: ${networkResult.error}`, 'error');
+            }
+        }
+
+        function disconnectVpn() {
+            if (!isConnected) return;
+
+            isConnected = false;
+            updateUi('Disconnected', REAL_IP, REAL_LOCATION, 
+                     'Connect', 'connect-btn', false);
+            showMessage("Disconnected. You are now using your local network IP.", 'info');
+        }
+
+        function toggleVpn() {
+            if (isConnecting) return;
+            if (isConnected) {
+                disconnectVpn();
+            } else {
+                connectVpn();
+            }
+        }
+
+        // --- Initialization ---
+
+        function initialize() {
+            // Display initial (real) location info
+            ipAddressEl.textContent = REAL_IP;
+            locationEl.textContent = REAL_LOCATION;
+            
+            // Optional: Start with a connection attempt to fetch dynamic status
+            // connectVpn(); // Start disconnected for MVP clarity
+        }
+
+        window.onload = initialize;
+
+        // Make toggleVpn available globally for the button click
+        window.toggleVpn = toggleVpn;
+
+        /* --------------------------------------------------
+         * Particle background (lightweight, dependency-free)
+         * Draws subtle glowing particles behind the UI.
+         * Does not capture pointer events (pointer-events: none).
+         * -------------------------------------------------- */
+
+        (function initParticles(){
+            const canvas = document.getElementById('particle-canvas');
+            if (!canvas) return;
+            const ctx = canvas.getContext('2d');
+
+            let DPR = Math.max(1, window.devicePixelRatio || 1);
+            let width = 0, height = 0;
+
+            function resize(){
+                DPR = Math.max(1, window.devicePixelRatio || 1);
+                width = Math.max(300, window.innerWidth);
+                height = Math.max(200, window.innerHeight);
+                canvas.width = Math.floor(width * DPR);
+                canvas.height = Math.floor(height * DPR);
+                canvas.style.width = width + 'px';
+                canvas.style.height = height + 'px';
+                ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+            }
+
+            window.addEventListener('resize', resize);
+            resize();
+
+            // Particle configuration
+            const NUM = Math.round((width * height) / 6500); // scale by screen area
+            const particles = [];
+
+            function rand(min, max){ return Math.random() * (max - min) + min; }
+
+            for (let i = 0; i < NUM; i++){
+                particles.push({
+                    x: rand(0, width),
+                    y: rand(0, height),
+                    vx: rand(-0.15, 0.15),
+                    vy: rand(-0.15, 0.15),
+                    r: rand(0.6, 2.4),
+                    hue: rand(180, 200),
+                    alpha: rand(0.15, 0.7)
+                });
+            }
+
+            let last = performance.now();
+
+            function update(dt){
+                for (const p of particles){
+                    p.x += p.vx * dt;
+                    p.y += p.vy * dt;
+                    if (p.x < -20) p.x = width + 20;
+                    if (p.x > width + 20) p.x = -20;
+                    if (p.y < -20) p.y = height + 20;
+                    if (p.y > height + 20) p.y = -20;
+                }
+            }
+
+            function draw(){
+                ctx.clearRect(0, 0, width, height);
+
+                // soft background glow (very subtle)
+                // ctx.fillStyle = 'rgba(9,12,18,0.2)';
+                // ctx.fillRect(0,0,width,height);
+
+                // draw particles
+                for (const p of particles){
+                    const grd = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.r * 6);
+                    grd.addColorStop(0, `rgba(120, 255, 220, ${p.alpha})`);
+                    grd.addColorStop(0.5, `rgba(40, 200, 180, ${p.alpha * 0.6})`);
+                    grd.addColorStop(1, `rgba(10, 20, 30, 0)`);
+                    ctx.beginPath();
+                    ctx.fillStyle = grd;
+                    ctx.arc(p.x, p.y, p.r * 4, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+
+                // optional: connect nearby particles with faint lines
+                const maxDist = 80;
+                ctx.lineWidth = 0.6;
+                for (let i = 0; i < particles.length; i++){
+                    for (let j = i + 1; j < particles.length; j++){
+                        const a = particles[i];
+                        const b = particles[j];
+                        const dx = a.x - b.x;
+                        const dy = a.y - b.y;
+                        const dist = Math.sqrt(dx*dx + dy*dy);
+                        if (dist < maxDist){
+                            const alpha = (1 - dist / maxDist) * 0.08;
+                            ctx.strokeStyle = `rgba(80,220,200,${alpha})`;
+                            ctx.beginPath();
+                            ctx.moveTo(a.x, a.y);
+                            ctx.lineTo(b.x, b.y);
+                            ctx.stroke();
+                        }
+                    }
+                }
+            }
+
+            function frame(now){
+                const dt = Math.min(40, now - last); // cap delta to avoid huge jumps
+                last = now;
+                update(dt);
+                draw();
+                requestAnimationFrame(frame);
+            }
+            requestAnimationFrame(frame);
+
+            // Lightweight mouse attraction/repel for subtle interaction
+            const mouse = { x: -9999, y: -9999 };
+            window.addEventListener('pointermove', (e) => {
+                mouse.x = e.clientX;
+                mouse.y = e.clientY;
+                // nudge nearest particles slightly
+                for (let i = 0; i < 6; i++){
+                    const p = particles[(Math.random() * particles.length)|0];
+                    const dx = p.x - mouse.x;
+                    const dy = p.y - mouse.y;
+                    const d2 = dx*dx + dy*dy;
+                    if (d2 < 20000){
+                        p.vx += (dx / Math.sqrt(d2+1)) * 0.0008;
+                        p.vy += (dy / Math.sqrt(d2+1)) * 0.0008;
+                    }
+                }
+            });
+
+            // reinitialize particle count on large resize
+            let resizeTimeout;
+            window.addEventListener('resize', ()=>{
+                clearTimeout(resizeTimeout);
+                resizeTimeout = setTimeout(()=>{
+                    const newNum = Math.round((window.innerWidth * window.innerHeight) / 6500);
+                    if (Math.abs(newNum - particles.length) > 6){
+                        particles.length = 0;
+                        for (let i = 0; i < newNum; i++){
+                            particles.push({ x: rand(0, width), y: rand(0, height), vx: rand(-0.15,0.15), vy: rand(-0.15,0.15), r: rand(0.6,2.4), hue: rand(180,200), alpha: rand(0.15,0.7) });
+                        }
+                    }
+                    resize();
+                }, 120);
+            });
+
+        })();
+
+    </script>
+
+</body>
+</html>
